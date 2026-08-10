@@ -1,68 +1,91 @@
-Phase 1: Foundation — Containerized LLM Infrastructure
+# LLM-HackBox
 
-Project: Vulnerable LLM Lab Phase scope: Environment setup and a verified, containerized pipeline connecting a Flask web service to a locally-hosted LLM. Status: Complete and verified end-to-end.
-Summary
+*(formerly developed under the codename "InternBot")*
 
-Before demonstrating any security vulnerability, the lab needed a working, reproducible base to build on: a Dockerized web application that can reliably reach a local LLM inference engine. This phase covers that foundation — the infrastructure decisions, the trust boundaries they establish, and the verification steps used to confirm each layer works before the next was added.
+A deliberately insecure, locally-hosted LLM chat application built to demonstrate, exploit, and remediate real-world vulnerabilities from the **OWASP Top 10 for LLM Applications (2025)**.
 
-This document is written for a technical reviewer evaluating engineering judgment and debugging methodology, not just the end result. Later phases (docs/phase-2-...) cover the actual OWASP LLM Top 10 exploitation and remediation work this foundation supports.
-Skills demonstrated in this phase
+> ⚠️ **For educational/demonstration purposes only.** LLM-HackBox is intentionally vulnerable. Do not deploy it on a public-facing server or use it with real credentials/data.
 
-    Docker containerization and multi-service orchestration via Compose
-    Container networking (bridge networks, host-to-container communication boundaries)
-    Environment-specific architecture decisions (Apple Silicon GPU constraints)
-    Secrets and configuration management (runtime injection vs. image-baked config)
-    Systematic diagnosis and recovery from environment-state issues without data loss
+## Why this project
 
-Architecture
+Most LLM security write-ups are theoretical. LLM-HackBox is a hands-on lab: a working Flask + Ollama chatbot with real, exploitable vulnerabilities, paired with a full exploitation walkthrough and remediation for each one — built to show practical, end-to-end AppSec/AI-security skill rather than just familiarity with the OWASP list.
 
- Browser
-    │  HTTP :5000
-    ▼
- ┌─────────────────────────┐        ┌────────────────────────────┐
- │  Docker container          │        │  Host machine (native)         │
- │  Flask web service          │──────▶│  Ollama inference engine        │
- │  chat logic, logging        │  HTTP │  llama3.2:1b                    │
- │                              │ :11434│                                 │
- └─────────────────────────┘        └────────────────────────────┘
+## Vulnerabilities covered
 
-Why the LLM runtime is not containerized: Docker Desktop on Apple Silicon runs containers inside a Linux virtual machine that does not have passthrough access to the host's Metal GPU. Containerizing the inference engine would force CPU-only inference. Running it natively while containerizing only the web-facing service keeps isolation where it's actually needed — around the component handling untrusted input — without sacrificing inference performance. This is also representative of a common real-world pattern: application logic and model-serving infrastructure are frequently operated as separate, independently-scaled services.
-Key engineering decisions
-Decision 	Rationale
-python:3.11-slim base image 	Minimizes attack surface and image size versus the full Python image
-Dependencies installed before app code is copied into the image 	Leverages Docker's layer caching — code changes don't force a full dependency reinstall on rebuild
-Flask bound to 0.0.0.0, not 127.0.0.1 	Required for the host to reach the service at all; a container's loopback interface is not externally reachable
-Config and secrets injected via env_file at runtime, excluded from the image via .dockerignore 	Same image can be reused across environments without secrets baked into a layer; standard config/secrets separation
-host.docker.internal as the LLM endpoint 	Docker Desktop's mechanism for a container to reach a service running on the host machine, since localhost inside a container refers to the container itself
-Local source mounted as a volume 	Enables live iteration during development without rebuilding the image on every change
-Verification methodology
+| Payload category | OWASP mapping | Status |
+|---|---|---|
+| Ignore Instructions / Direct Prompt Injection | LLM01 – Prompt Injection | ✅ Documented & exploited |
+| Fake Admin / System Override | LLM01 – Prompt Injection | ✅ Documented & exploited |
+| Reveal System Prompts | LLM07 – System Prompt Leakage | ✅ Documented & exploited |
+| HTML Injection | LLM05 – Improper Output Handling | ✅ Documented & exploited |
+| Direct Data Exfiltration | LLM01 / LLM05 | ✅ Documented & exploited |
 
-Each layer was proven independently before the next was built on top of it, rather than debugging the whole stack at once:
+Full exploitation walkthroughs: [`docs/EXPLOITATION.md`](docs/EXPLOITATION.md)
+Formal write-up with CVSS scoring: [`docs/InternBot_Security_Assessment_Report.docx`](docs/InternBot_Security_Assessment_Report.docx)
 
-    Container liveness — a root health endpoint confirms the Flask process itself is up and reachable from the host.
-    Cross-boundary connectivity — a second endpoint performs a real request from inside the container to the native Ollama process and returns the result, proving the full network path (host browser → container → host LLM process) end-to-end, not just that each piece works in isolation.
+## Architecture
 
-curl http://localhost:5000/
-# → Vulnerable LLM Lab — web container is alive.
+```
+Browser (chat UI)
+      │
+      ▼
+Flask app (web/app.py)  ──►  Ollama (llama3.2:1b)
+      │
+      ▼
+Docker Compose (local orchestration)
+```
 
-curl http://localhost:5000/health-check-ollama
-# → {"model":"llama3.2:1b","ollama_reachable":true,"sample_reply":"OK."}
+## Tech stack
 
-Engineering notes: diagnosing an environment issue without guessing
+- **Backend:** Python / Flask
+- **LLM runtime:** Ollama (`llama3.2:1b`)
+- **Orchestration:** Docker Compose
+- **Environment:** macOS (M4 Mac Mini)
 
-Partway through this phase, repeated mkdir/touch commands run from an already-nested directory produced four levels of duplicate project folders, three of them empty. Rather than deleting anything on assumption, the approach taken was:
+## Getting started
 
-    Enumerate every copy of a known config file across the filesystem to see the actual scope of the problem.
-    Programmatically check line counts of key files at each nesting level, rather than opening each one manually, to identify which single copy held the real, non-empty content.
-    Move the verified-good copy to a clean path, then remove the confirmed-empty duplicates — deletion only after the data to keep had been positively identified.
+```bash
+git clone https://github.com/nullPrivilege15/LLM-HackBox.git
+cd LLM-HackBox
+cp .env.example .env        # fill in local config
+docker compose up
+```
 
-The same evidence-first approach was applied when docker compose build failed with the Dockerfile cannot be empty: rather than assuming which file was at fault, every project file was checked by line count in one pass, which correctly identified three empty files (a Dockerfile, .env, and .gitignore) that had silently failed to save during the folder migration.
+App will be available at `http://localhost:5000` (adjust to your configured port).
 
-This reflects a broader habit carried through the rest of the project: when the system reports unexpected state, verify what's actually on disk before making changes, rather than trusting what should be there.
-Tech stack (this phase)
-Component 	Choice 	Notes
-Containerization 	Docker + Docker Compose 	Single-service compose file, extensible for later phases
-Web framework 	Flask 3.0 	Synchronous, minimal boilerplate
-LLM runtime 	Ollama, llama3.2:1b 	Local, no API costs, no external data exposure
-Language 	Python 3.11 	Matches container base image
-Config 	python-dotenv + Compose env_file 	Environment-specific values kept out of source and image
+## Project structure
+
+```
+LLM-HackBox/
+├── web/                   # Flask application + UI
+│   ├── app.py
+│   ├── Dockerfile
+│   ├── requirements.txt
+│   ├── static/
+│   └── templates/
+├── docs/
+│   ├── EXPLOITATION.md              # Step-by-step exploit walkthroughs
+│   ├── InternBot_Security_Assessment_Report.docx  # Formal CVSS-scored report
+│   ├── phase-1-foundation.md
+│   ├── phase-1-part-2-Step-3.md
+│   └── payloads/                    # Evidence per vulnerability category
+│       ├── Direct Exfiltration/
+│       ├── Fake Admin Override/
+│       ├── HTML Injection/
+│       ├── Ignore_Instructions/
+│       └── Reveal System Prompts/
+└── docker-compose.yml
+```
+
+## Exploitation & remediation
+
+Full writeup: [`docs/EXPLOITATION.md`](docs/EXPLOITATION.md) — each vulnerability covers the vulnerable code path, a reproducible exploit, its impact, and the fix.
+
+## Disclaimer
+
+This project is built strictly for security research, training, and portfolio demonstration. All testing was performed against a local, self-hosted instance with no real user data.
+
+## Author
+
+**Tathagat** — Application Security Engineer
+[LinkedIn](#) · [Portfolio](#)
