@@ -88,4 +88,5 @@ This project is built strictly for security research, training, and portfolio de
 ## Author
 
 **Tathagat** — Application Security Engineer
-[LinkedIn](#) · [Portfolio](#)
+[LinkedIn](https://www.linkedin.com/in/tathagat-biswas/)
+
